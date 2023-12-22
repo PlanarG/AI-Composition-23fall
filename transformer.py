@@ -3,7 +3,21 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 import numpy as np
+from tqdm import tqdm
 import matplotlib.pyplot as plt
+
+sad = np.load('./music-source/sad.npy');
+happy = np.load('./music-source/happy.npy');
+rnd = np.load('./music-source/rnd.npy');
+
+def convert(comp):
+    result = []
+    for i in range(comp.shape[0]):
+        tmp = []
+        for j in range(comp.shape[1] // 2):
+            tmp.append(comp[i][j * 2] * 2 + comp[i][j * 2 + 1])
+        result.append(tmp)
+    return np.array(result)
 
 # MIDI pitch range, used in one-hot encoding
 # equals to 2 * pitch + break(0/1) numerically
@@ -19,23 +33,27 @@ num_layers = 2
 num_heads = 2
 
 # number of epochs
-num_epochs = 100
+num_epochs = 5
 
 ###
 ### Load data
 ###
 
 # file format: [[2 * pitch + break], [...], ...]
-x_train = np.load('./data/x_train.npy')
+# x_train = np.load('./data/x_train.npy')
+x_train = np.concatenate((convert(sad), convert(happy)), axis = 0)
 
 # file format: [sorrowness for song 1, sorrowness for song 2, ...]
-sorrow_train = np.load('./data/sorrow_train.npy')
+# sorrow_train = np.load('./data/sorrow_train.npy')
+sorrow_train = np.concatenate((np.array([1.] * sad.shape[0]), 
+                               np.array([0.] * happy.shape[0])
+                                ), axis=0).astype(np.float32)
 
-# file format: [rythmness for song 1, rythmness for song 2, ...]
-rythmn_train = np.load('./data/rythmn_train.npy')
+print(sad.shape, happy.shape, x_train.shape, sorrow_train.shape)
 
-train_data = TensorDataset(x_train, sorrow_train, rythmn_train)
-train_loader = DataLoader(dataset = train_data, batch_size = 32, shuffle = True)
+
+train_data = TensorDataset(torch.tensor(x_train), torch.tensor(sorrow_train))
+train_loader = DataLoader(dataset = train_data, batch_size = 16, shuffle = True)
 
 ###
 ### Define model
@@ -45,24 +63,22 @@ class Transformer(nn.Module):
     def __init__(self, input_size, hidden_size, num_heads, num_layers):
         super(Transformer, self).__init__()
         self.embedding = nn.Embedding(input_size, hidden_size)
-        self.transformer = Transformer(
+        self.transformer = nn.Transformer(
             d_model=hidden_size,
-            num_heads=num_heads,
+            nhead=num_heads,
             num_encoder_layers=num_layers,
             num_decoder_layers=num_layers,
+            batch_first=True
         )
         # sorrowness
-        self.fc1 = nn.Linear(hidden_size, 1)
-        # rythmness
-        self.fc2 = nn.Linear(hidden_size, 1)
+        self.fc = nn.Linear(hidden_size, 1)
     
     def forward(self, x):
         x = self.embedding(x)
         output = self.transformer(x, x)
         output = torch.mean(output, dim = 1)
-        sorrowness = self.fc1(output)
-        rythmness = self.fc2(output)
-        return sorrowness, rythmness
+        sorrowness = self.fc(output)
+        return sorrowness
 
 model = Transformer(input_size, hidden_size, num_heads, num_layers)
 
@@ -71,21 +87,21 @@ model = Transformer(input_size, hidden_size, num_heads, num_layers)
 ### 
 
 criterion1 = nn.MSELoss()
-criterion2 = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr = 0.001)
 
 losses = []
 
 for epoch in range(num_epochs):
-    for x, sorrow_y, rythmn_y in train_loader:
+    for x, sorrow_y in tqdm(train_loader):
         optimizer.zero_grad()
-        sorrowness, rythmness = model(x)
-        loss = criterion1(sorrowness, sorrow_y) + criterion2(rythmness, rythmn_y)
+        sorrowness = model(x)
+        print(sorrowness)
+        loss = criterion1(sorrowness, sorrow_y)
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
 
-torch.save(model, './model/transformer.pt')
+# torch.save(model, './model/transformer.pt')
 
 ###
 ### Plot loss
