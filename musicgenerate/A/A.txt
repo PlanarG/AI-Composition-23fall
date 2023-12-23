@@ -1,0 +1,1 @@
+populr=100,generation=500,coneff=0.85
